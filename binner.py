@@ -1,3 +1,17 @@
+from string import ascii_letters
+
+import numpy as np
+from numpy import cos, sin, pi
+from numpy.random import randint, choice, uniform
+
+import rtree
+
+import pandas as pd
+import csv
+
+from matplotlib import pyplot as plt
+from IPython.display import Image
+
 class GeneticPacking:
     """
     A genetic packing algorithm to find approximate solutions to the 3D bin 
@@ -6,27 +20,41 @@ class GeneticPacking:
 
     def __init__(self,
                  num_generations: int = 1000,
-                 population: int = 1000,
+                 pop_size: int = 1000,
                  starting_size: int = 1000,
                  size_calc: float = 0,
+                 mutation: float = .10,
                  survival: int = 75,
+                 keepers: int = 5,
                  csv_location: float = "") -> None:
         """
         Genetic Packing and CSV loader
+        ------------------
         :param num_generations:    integer, number of generations to spawn
-        :param population:         integer, size of each population
+        :param pop_size:           integer, size of each pop_size
         :param starting_size:      integer, size of starting container
-        :param size_calc:          float,    unless 0, takes starting box volumes
-                                             and multiples for starting container size
+        :param size_calc:          float,   unless 0, takes starting box volumes
+                                            and multiples for starting container size
+        :param mutation:           float,   % mutation rate for individual
         :param survival:           integer, number of surviving population
-        :param csv_location:       string,   location of packing list .csv
-                                             defaults to local folder
+        :param keepers:            integer, number of population that survive
+                                            after mating
+        :param csv_location:       string,  location of packing list .csv
+                                            defaults to local folder
         """
 
         # Basic loading parameters
         self.num_generations = num_generations
-        self.population = population
+        self.pop_size = pop_size
         self.survival = survival
+        self.keepers = keepers
+        self.mutation = mutation
+
+        # Variables to hold
+        self.fitness_values = {}
+        self.s_values = []
+        self.survivors = {}
+        self.next_gen = {}
 
         # CSV loading options. Defaults to local folder
         if csv_location == "":
@@ -34,6 +62,8 @@ class GeneticPacking:
         else:
             self.purchase = pd.read_csv(csv_location, index_col=0)
 
+        # This syntax is not ideal, here we replace the starting_size value
+        # by the size_calc factor
         if size_calc != 0:
             self.starting_size = size_calc * (sum(self.purchase["volume"])) ** (1 / 3)
         else:
@@ -41,17 +71,12 @@ class GeneticPacking:
 
         # To maintain the integrity of each chromosome, we will use a dictionary
         # structure. This is the initial population generator
-        self.population = {x: self.individual_generator()
-                           for x in range(self.population)}
-
-        # Calculate the fitness of each individual in the population
-        self.fitness_values = {}
-        for individual in self.population:
-            self.fitness_values[individual] = self.fitness_calculator(individual)
+        self.population = {x: self.individual_generator() for x in range(self.pop_size)}
 
     def gene_generator(self, index) -> dict:
         """
         A random gene generator for an item in CSV
+        ------------------
         :param index:              integer, number of gene to grab from.
 
         """
@@ -76,17 +101,19 @@ class GeneticPacking:
         """
         return {x: self.gene_generator(x) for x in self.purchase.index}
 
-    def random_rotation(self, gene) -> dict:
+    @staticmethod
+    def random_rotation(gene) -> dict:
         """
         Applies a random orientation to a gene prism
+        ------------------
         :param gene:               dict, gene information with orientation values
         """
         # Roll is x-axis, pitch is y-axis and yaw is z-axis orientation
-        # since I am assuming rectangular prisims, we only consider 4 options
-        i = identity = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
-        r = roll = np.array([[1, 0, 0], [0, 1, 0], [0, 0, -1]])
-        p = pitch = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]])
-        y = yaw = np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]])
+        # since I am assuming rectangular prisms, we only consider 4 options
+        i = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])           # identity
+        r = np.array([[1, 0, 0], [0, 1, 0], [0, 0, -1]])          # roll
+        p = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]])          # pitch
+        y = np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]])          # yaw
 
         ###
         # TODO: Consider adding rotations other than Pi/2 ???
@@ -98,7 +125,7 @@ class GeneticPacking:
         gene["prism_vector"] = np.diag(orientation * gene["prism_vector"])
 
         # This is data needed for our modified overlap calculator
-        # rtree corrdinates x_min, y_min, z_min, x_max, y_max, z_max
+        # rtree coordinates x_min, y_min, z_min, x_max, y_max, z_max
         min_max = [sorted([gene["coordinates"][i],
                            gene["coordinates"][i] + gene["prism_vector"][i]])
                    for i in range(3)]
@@ -109,10 +136,11 @@ class GeneticPacking:
         return gene
 
     def fitness_calculator(self, individual) -> float:
-        """                             
-        Spacial searching format, Khairuddin, et al. are unclear on how they 
-        quickly tested if rectangles overlapped. Building a R-tree seems the 
-        most pythonic option. Returns fitness values as a float. 
+        """
+        Spacial searching format, Khairuddin, et al. are unclear on how they
+        quickly tested if rectangles overlapped. Building a R-tree seems the
+        most pythonic option. Returns fitness values as a float.
+        ------------------
         :param individual:         integer, the number value for the dict index
         """
 
@@ -132,8 +160,8 @@ class GeneticPacking:
             gene_data = self.population[individual][i]
 
             # If the box intersects another in the set, return infinity fitness
-            # since we are minimizing the fitness value, this will efectively kill
-            # the individual. 
+            # since we are minimizing the fitness value, this will effectively kill
+            # the individual.
             if len(list(idx3d.intersection(gene_data["rtree_coordinate"]))) > 1:
                 return np.Infinity
 
@@ -147,22 +175,43 @@ class GeneticPacking:
         f_value = np.prod([(bounding_box[i + 3] - bounding_box[i])
                            for i in range(3)])
 
-        return f_value
+        # This calculates the surviving individuals from list
 
-    def random_generator(self) -> None:
-        """
-        """
-        pass
+        return f_value
 
     def select(self) -> None:
         """
+        Selects top survivors from initial population and populates into dictionary
         """
-        pass
+
+        # Calculate the fitness of each individual in the population
+        self.fitness_values = {}
+        for individual in self.population:
+            self.fitness_values[individual] = self.fitness_calculator(individual)
+
+        # This can be improved, but for now, we will just sort the dictionary to find survivors
+        self.s_values = sorted(self.fitness_values.values())[:self.survival]
+
+        self.survivors = {k: v for k, v in self.fitness_values.items()
+                          if v in self.s_values and v != np.Infinity}
+
+        # Sort the survivor dictionary to speed favor best survivors in mating
+        self.survivors = dict(sorted(self.survivors.items(),
+                                     key=lambda item: item[1]))
 
     def mate(self) -> None:
         """
+        This function takes members of the surviving population and
+        mates them by choosing a partition value, makes a new dictionary with
+        the values, and then creates the next generation.
         """
-        pass
+
+        # Pass the keepers into the next generation
+        survive_keys = self.survivors.keys()[:self.keepers]
+        self.next_gen = {k: v for k, v in self.population.items() if k in survive_keys}
+
+        # Next we select one of the top % and mate it with the general population
+        mating_keys = self.survivors.keys()[:int(self.pop_size * self.mutation)]
 
     def mutation(self) -> None:
         pass
