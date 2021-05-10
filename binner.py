@@ -12,9 +12,10 @@ import csv
 from matplotlib import pyplot as plt
 from IPython.display import Image
 
+
 class GeneticPacking:
     """
-    A genetic packing algorithm to find approximate solutions to the 3D bin 
+    A genetic packing algorithm to find approximate solutions to the 3D bin
     packing problem
     """
 
@@ -110,10 +111,10 @@ class GeneticPacking:
         """
         # Roll is x-axis, pitch is y-axis and yaw is z-axis orientation
         # since I am assuming rectangular prisms, we only consider 4 options
-        i = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])           # identity
-        r = np.array([[1, 0, 0], [0, 1, 0], [0, 0, -1]])          # roll
-        p = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]])          # pitch
-        y = np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]])          # yaw
+        i = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])  # identity
+        r = np.array([[1, 0, 0], [0, 1, 0], [0, 0, -1]])  # roll
+        p = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]])  # pitch
+        y = np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]])  # yaw
 
         ###
         # TODO: Consider adding rotations other than Pi/2 ???
@@ -199,6 +200,28 @@ class GeneticPacking:
         self.survivors = dict(sorted(self.survivors.items(),
                                      key=lambda item: item[1]))
 
+    def mutate(self, individual) -> dict:
+        """
+        Takes population dictionary and randomly reorients boxes with possible
+        relocation of object
+        """
+
+        ###
+        # TODO: Khairuddin, et al were unclear on how often to mutate, might be
+        #       fun to experiment with different mutation options
+        ###
+
+        # If mutation occurs, first total reset box location
+        for gene in individual:
+            print(gene)
+            if uniform(1) < self.mutation:
+                individual[gene]["coordinates"] = uniform(0, self.starting_size, 3)
+                individual[gene] = self.random_rotation(individual[gene])
+            else:
+                individual[gene] = self.random_rotation(individual[gene])
+
+        return individual
+
     def mate(self) -> None:
         """
         This function takes members of the surviving population and
@@ -206,12 +229,44 @@ class GeneticPacking:
         the values, and then creates the next generation.
         """
 
-        # Pass the keepers into the next generation
-        survive_keys = self.survivors.keys()[:self.keepers]
-        self.next_gen = {k: v for k, v in self.population.items() if k in survive_keys}
+        self.next_gen = {}
 
-        # Next we select one of the top % and mate it with the general population
-        mating_keys = self.survivors.keys()[:int(self.pop_size * self.mutation)]
+        # First, pass the keepers into the next generation
+        survive_keys = list(self.survivors.keys())[:self.keepers]
+        old_num = {k: v for k, v in self.population.items() if k in survive_keys}
 
-    def mutation(self) -> None:
-        pass
+        # Renumber keys
+        for i, values in enumerate(old_num.items()):
+            self.next_gen[i] = values[1]
+
+        # We will be keeping the index values for renumbering
+        current_key = self.keepers
+
+        # Next we select one of the top % to mate with the general population
+        mating_keys = list(self.survivors.keys())[:int(self.pop_size * self.mutation)]
+        gen_keys = set(self.survivors.keys())
+
+        # Choose our lucky couple, partition and mate
+        boy_num = choice(mating_keys)
+        boy = self.population[boy_num]
+
+        # Numpy can't choose from a set, so making a list from set first
+        girl_num = choice(list(set(mating_keys) - {boy_num}))
+        girl = self.population[girl_num]
+
+        # This is the splice partition
+        splice = int(len(boy))
+        self.next_gen[current_key] = child = {k: v for k, v in boy.items() if k < splice}
+        child.update({k: v for k, v in girl.items() if k >= splice})
+        print(child)
+        child = self.mutate(child)  # self.next_gen[current_key]
+        current_key += 1
+
+        # Now we splice from the other direction
+        self.next_gen[current_key] = child = {k: v for k, v in boy.items() if k >= splice}
+        child.update({k: v for k, v in girl.items() if k < splice})
+        self.next_gen[current_key] = self.mutate(child)
+
+
+
+
